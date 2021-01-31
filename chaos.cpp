@@ -6,7 +6,7 @@ extern "C" {
 #include "cacti.h"
 }
 
-#define AMPLIFICATION_FACTOR 10
+#define AMPLIFICATION_FACTOR 2 // 10
 
 std::mt19937 init_random() {
     std::random_device rd;
@@ -24,27 +24,34 @@ static act_t f1[1] = {do_chaos};
 static role_t r1 = {1, f1};
 
 static void do_chaos(void**, size_t, void*) {
+    printf("[%li] do_chaos: %li\n", actor_id_self(), rx_msgs.load());
     if (actor_id_self() == 0) {
-       printf("[%li] do_chaos: %li\n", actor_id_self(), rx_msgs.load());
-        if (++rx_one_times == 1000) {
+        if (++rx_one_times == 5) { // 1000
             // (try to) kill all actors
             for (int i = 0; i <= max_actor_id; i++)
                 send_message(i, {MSG_GODIE, 0, NULL});
+            int max_id = max_actor_id;
+            printf("\033[31msent MSG_GODIE to all %d\n\033[0m", max_id);
+            // return;
             rx_one_times = 0;
         }
         rx_msgs = 0;
     }
     rx_msgs.fetch_add(1);
     auto cur_max_actor_id = max_actor_id.load();
-    while (actor_id_self() > cur_max_actor_id)
+    while (actor_id_self() > cur_max_actor_id) {
+        printf("reeeeee\n");
         max_actor_id.compare_exchange_weak(cur_max_actor_id, actor_id_self());
+    }
 
     for (int i = 0; i < AMPLIFICATION_FACTOR; i++) {
         std::uniform_int_distribution<int> distribution(0, max_actor_id + 5);
         auto target = distribution(t_random);
 
-        std::uniform_int_distribution<int> distribution2(0, 4);
-        message_type_t msg_types[] = {MSG_HELLO, MSG_HELLO, MSG_HELLO, MSG_GODIE, MSG_SPAWN};
+        // std::uniform_int_distribution<int> distribution2(0, 4);
+        std::uniform_int_distribution<int> distribution2(0, 2);
+        // message_type_t msg_types[] = {MSG_HELLO, MSG_HELLO, MSG_HELLO, MSG_GODIE, MSG_SPAWN};
+        message_type_t msg_types[] = {MSG_HELLO, MSG_GODIE, MSG_SPAWN};
         auto msg_type = msg_types[distribution2(t_random)];
 
         if (msg_type == MSG_GODIE && target == 0) // protect the first actor against death
@@ -59,8 +66,8 @@ static void do_chaos(void**, size_t, void*) {
 
 int main() {
     actor_id_t initial;
-    for (long int i = 0; i < 1000000; i++) {
-        printf("Loop #%li\n", i);
+    // for (long int i = 0; i < 1000000; i++) {
+        // printf("Loop #%li\n", i);
 
         max_actor_id = 0;
         rx_one_times = 0;
@@ -73,5 +80,5 @@ int main() {
         actor_system_join(initial);
 
         printf("-> Complete! Max actor id: %li\n", max_actor_id.load());
-    }
+    // }
 }
