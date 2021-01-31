@@ -6,7 +6,7 @@ extern "C" {
 #include "cacti.h"
 }
 
-#define AMPLIFICATION_FACTOR 2 // 10
+#define AMPLIFICATION_FACTOR 10 // 10
 
 std::mt19937 init_random() {
     std::random_device rd;
@@ -24,14 +24,14 @@ static act_t f1[1] = {do_chaos};
 static role_t r1 = {1, f1};
 
 static void do_chaos(void**, size_t, void*) {
-    printf("[%li] do_chaos: %li\n", actor_id_self(), rx_msgs.load());
+    // printf("[%li] do_chaos: %li\n", actor_id_self(), rx_msgs.load());
     if (actor_id_self() == 0) {
-        if (++rx_one_times == 5) { // 1000
+        if (++rx_one_times == 1000) { // 1000
             // (try to) kill all actors
             for (int i = 0; i <= max_actor_id; i++)
                 send_message(i, {MSG_GODIE, 0, NULL});
-            int max_id = max_actor_id;
-            printf("\033[31msent MSG_GODIE to all %d\n\033[0m", max_id);
+            // int max_id = max_actor_id;
+            // printf("\033[31msent MSG_GODIE to all %d\n\033[0m", max_id);
             // return;
             rx_one_times = 0;
         }
@@ -40,7 +40,6 @@ static void do_chaos(void**, size_t, void*) {
     rx_msgs.fetch_add(1);
     auto cur_max_actor_id = max_actor_id.load();
     while (actor_id_self() > cur_max_actor_id) {
-        printf("reeeeee\n");
         max_actor_id.compare_exchange_weak(cur_max_actor_id, actor_id_self());
     }
 
@@ -48,10 +47,8 @@ static void do_chaos(void**, size_t, void*) {
         std::uniform_int_distribution<int> distribution(0, max_actor_id + 5);
         auto target = distribution(t_random);
 
-        // std::uniform_int_distribution<int> distribution2(0, 4);
-        std::uniform_int_distribution<int> distribution2(0, 2);
-        // message_type_t msg_types[] = {MSG_HELLO, MSG_HELLO, MSG_HELLO, MSG_GODIE, MSG_SPAWN};
-        message_type_t msg_types[] = {MSG_HELLO, MSG_GODIE, MSG_SPAWN};
+        std::uniform_int_distribution<int> distribution2(0, 4);
+        message_type_t msg_types[] = {MSG_HELLO, MSG_HELLO, MSG_HELLO, MSG_GODIE, MSG_SPAWN};
         auto msg_type = msg_types[distribution2(t_random)];
 
         if (msg_type == MSG_GODIE && target == 0) // protect the first actor against death

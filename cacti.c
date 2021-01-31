@@ -124,7 +124,6 @@ static actor_id_t create_new_actor(role_t *const role) {
 
 		for (size_t i = 0; i < tm->actor_count; i++) {
 			temp[i] = tm->actors[i];
-			actor_destroy(&tm->actors[i]);
 		}
 
 		free(tm->actors);
@@ -159,10 +158,13 @@ static actor_id_t create_new_actor(role_t *const role) {
 
 static message_t *tm_job_get() {
 	for (size_t steps = 0; steps < tm->actor_count; steps++) {
+		// printf("\tpthread_mutex_lock(tm->actors[%ld].actor_mutex);\n", tm->actor_index);
+		// printf("tm->actor_count = %ld\n", tm->actor_count);
 		pthread_mutex_lock(tm->actors[tm->actor_index].actor_mutex);
+		// printf("success\n");
 
 		actor_t *curr_actor = &(tm->actors[tm->actor_index]);
-		printf("\tcurr actor: %ld ", curr_actor->id);
+		// printf("\tcurr actor: %ld ", curr_actor->id);
 
 		if (curr_actor->job_count > 0) {
 			message_t *job = &(curr_actor->jobs[curr_actor->job_index]);
@@ -172,20 +174,21 @@ static message_t *tm_job_get() {
 			curr_actor->job_count--;
 			tm->job_count--;
 
+			// printf("gotem\n");
+			// printf("\tpthread_mutex_unlock(tm->actors[%ld].actor_mutex);\n", tm->actor_index);
 			pthread_mutex_unlock(tm->actors[tm->actor_index].actor_mutex);
 
 			tm->actor_index = (tm->actor_index + 1) % tm->actor_count;
 
-			printf("gotem\n");
-
 			return job;
 		}
 
-		tm->actor_index = (tm->actor_index + 1) % tm->actor_count;
-
+		// printf("\tpthread_mutex_unlock(tm->actors[%ld].actor_mutex);\n", tm->actor_index);
 		pthread_mutex_unlock(tm->actors[tm->actor_index].actor_mutex);
 
-		printf("nope\n");
+		tm->actor_index = (tm->actor_index + 1) % tm->actor_count;
+
+		// printf("nope\n");
 	}
 
 	return NULL;
@@ -234,6 +237,7 @@ static void *sig_thread_run() {
 
 static void *worker_thread_run() {
 	while (1) {
+		printf("\tpthread_mutex_lock(tm->access_mutex);\n");
 		pthread_mutex_lock(tm->access_mutex);
 
 		while (tm->job_count == 0 && tm->dead_actor_count != tm->actor_count) {
@@ -248,14 +252,17 @@ static void *worker_thread_run() {
 
 		printf("wake the fuck up thread #%ld, there is a message to process\n", pthread_self() % 1000);
 
+		printf("looking for a job\n");
 		message_t *job = tm_job_get();
 		if (job != NULL) {
 			tm->working_count++;
 		}
 
+		printf("\tpthread_mutex_unlock(tm->access_mutex);\n");
 		pthread_mutex_unlock(tm->access_mutex);
 
 		actor_t *actor = &(tm->actors[current_actor_id]);
+		actor_id_t actor_id = actor->id;
 
 		if (job == NULL) {
 			printf("job == NULL\n");
@@ -291,20 +298,26 @@ static void *worker_thread_run() {
 
 				case MSG_GODIE:
 					printf("got MSG_GODIE\n");
+
+					printf("pthread_mutex_lock(tm->access_mutex);\n");
+					pthread_mutex_lock(tm->access_mutex);
+
+					printf("pthread_mutex_lock(tm->actors[%ld]->actor_mutex);\n", actor_id);
 					pthread_mutex_lock(actor->actor_mutex);
 
 					if (!actor->is_dead) {
-						pthread_mutex_lock(tm->access_mutex);
-
 						tm->dead_actor_count++;
-
-						pthread_mutex_unlock(tm->access_mutex);
 					}
 					actor->is_dead = true;
 
 					printf("\t\t\tdead/total: %ld/%ld\n", tm->dead_actor_count, tm->actor_count);
 
+					printf("pthread_mutex_unlock(tm->actors[%ld]->actor_mutex);\n", actor_id);
 					pthread_mutex_unlock(actor->actor_mutex);
+
+					printf("pthread_mutex_unlock(tm->access_mutex);\n");
+					pthread_mutex_unlock(tm->access_mutex);
+
 					break;
 
 				case MSG_HELLO: // TODO: czy to nie jest zbedne? (MSG_HELLO == 0)
@@ -318,21 +331,21 @@ static void *worker_thread_run() {
 					break;
 			}
 
-			// printf("free(job);\n");
-			// free(job); // TODO: czy na pewno zwalniamy pamiec?
+			// pthread_mutex_lock(tm->access_mutex);
+			// pthread_mutex_lock(tm->actors[current_actor_id].actor_mutex);
 
-			pthread_mutex_lock(tm->access_mutex);
-			pthread_mutex_lock(tm->actors[current_actor_id].actor_mutex);
+			// tm->working_count--;
 
-			tm->working_count--;
+			// printf("job done, messages in the system: %ld\n", tm->job_count);
 
-			printf("job done, messages in the system: %ld\n", tm->job_count);
-
-			pthread_mutex_unlock(tm->actors[current_actor_id].actor_mutex);
+			// pthread_mutex_unlock(tm->actors[current_actor_id].actor_mutex);
 		}
-		if (job == NULL) {
-			pthread_mutex_lock(tm->access_mutex);
-		}
+		// if (job == NULL) {
+		// 	pthread_mutex_lock(tm->access_mutex);
+		// }
+		
+		pthread_mutex_lock(tm->access_mutex);
+		tm->working_count--;
 		
 		current_actor_id = -1;
 		if (tm->working_count == 0 && tm->job_count == 0 && tm->dead_actor_count == tm->actor_count) {
@@ -466,9 +479,14 @@ int send_message(actor_id_t actor, message_t message) {
 
 	pthread_mutex_unlock(tm->actors[actor].actor_mutex);
 
-	printf("sent a message, messages in the system: %ld, wakey wakey: %d\n", tm->job_count, tm->job_count == 1);
+	printf(
+		"sent a message to %ld, messages in the system: %ld, wakey wakey: %d\n",
+		actor,
+		tm->job_count,
+		tm->job_count == 1 && tm->working_count < POOL_SIZE
+	);
 
-	if (tm->job_count == 1) {
+	if (tm->job_count == 1 && tm->working_count < POOL_SIZE) {
 		pthread_cond_signal(tm->work_cond);
 	}
 	pthread_mutex_unlock(tm->access_mutex);
