@@ -48,22 +48,54 @@ thread_manager_t *tm;
 
 
 static void actor_destroy(actor_t *actor) {
-	free(actor->role);
-	pthread_mutex_destroy(actor->actor_mutex);
-	free(actor->jobs);
+	if (actor == NULL) {
+		return;
+	}
+
+	if (actor->role != NULL) {
+		free(actor->role);
+	}
+
+	if (actor->actor_mutex != NULL) {
+		pthread_mutex_destroy(actor->actor_mutex);
+		free(actor->actor_mutex);
+	}
+
+	if (actor->jobs != NULL) {
+		free(actor->jobs);
+	}
 
 	free(actor);
 }
 
 
 static void tm_destroy() {
+	if (tm == NULL) {
+		return;
+	}
+
 	for (size_t i = 0; i < tm->actor_count; i++) {
 		actor_destroy(&tm->actors[i]);
 	}
 
-	pthread_mutex_destroy(tm->access_mutex);
-	pthread_cond_destroy(tm->work_cond);
-	pthread_cond_destroy(tm->finish_cond);
+	if (tm->access_mutex != NULL) {
+		pthread_mutex_destroy(tm->access_mutex);
+		free(tm->access_mutex);
+	}
+
+	if (tm->work_cond != NULL) {
+		pthread_cond_destroy(tm->work_cond);
+		free(tm->work_cond);
+	}
+
+	if (tm->finish_cond != NULL) {
+		pthread_cond_destroy(tm->finish_cond);
+		free(tm->finish_cond);
+	}
+
+	if (tm->sig_thread != NULL) {
+		free(tm->sig_thread);
+	}
 
 	free(tm);
 }
@@ -95,7 +127,11 @@ static actor_id_t create_new_actor(role_t *const role) {
 
 	new_actor->id = tm->actor_count;
 	new_actor->role = role;
+
+	new_actor->actor_mutex = calloc(1, sizeof(pthread_mutex_t));
+	if (new_actor->actor_mutex == NULL) exit(1);
 	if (pthread_mutex_init(new_actor->actor_mutex, NULL) == -1) exit(1);
+
 	new_actor->jobs = calloc(ACTOR_QUEUE_LIMIT, sizeof(message_t));
 	if (new_actor->jobs == NULL) {
 		exit(1);
@@ -177,7 +213,7 @@ static void *sig_thread_run() {
 		pthread_join(tm->threads[i], NULL);
 	}
 
-	return NULL;
+	return NULL; // TODO: exit(1)?
 }
 
 
@@ -276,15 +312,26 @@ int actor_system_create(actor_id_t *actor, role_t *const role) {
 	}
 
 	tm->actors = calloc(BASE_ACTORS_VECTOR_SIZE, sizeof(actor_t));
+	if (tm->actors == NULL) {
+		return -1;
+	}
 	tm->actors_size = BASE_ACTORS_VECTOR_SIZE;
 	tm->actor_count = 0;
 	tm->dead_actor_count = 0;
 
-	*actor = create_new_actor(role);
-
+	tm->access_mutex = calloc(1, sizeof(pthread_mutex_t));
+	if (tm->access_mutex == NULL) return -1;
 	if (pthread_mutex_init(tm->access_mutex, NULL) == -1) return -2;
+
+	tm->work_cond = calloc(1, sizeof(pthread_cond_t));
+	if (tm->work_cond == NULL) return -1;
 	if (pthread_cond_init(tm->work_cond, NULL) == -1) return -2;
+
+	tm->finish_cond = calloc(1, sizeof(pthread_cond_t));
+	if (tm->finish_cond == NULL) return -1;
 	if (pthread_cond_init(tm->finish_cond, NULL) == -1) return -2;
+
+	*actor = create_new_actor(role);
 
 	tm->job_count = 0;
 	tm->actor_index = 0;
@@ -293,11 +340,22 @@ int actor_system_create(actor_id_t *actor, role_t *const role) {
 	if (tm->threads == NULL) {
 		return -1;
 	}
-
 	for (size_t i = 0; i < POOL_SIZE; i++) {
 		if (pthread_create(&(tm->threads[i]), NULL, worker_thread_run, NULL) == -1) return -3;
 	}
+
+	tm->sig_thread = calloc(1, sizeof(pthread_t));
+	if (tm->sig_thread == NULL) return -1;
 	if (pthread_create(tm->sig_thread, NULL, sig_thread_run, NULL) == -1) return -3;
+
+	message_t *message = calloc(1, sizeof(message_t));
+	if (message == NULL) {
+		exit(1);
+	}
+	message->message_type = MSG_HELLO;
+	message->nbytes = 1;
+	message->data = (void *)0;
+	send_message(0, *message);
 
 	return 0;
 }
@@ -345,6 +403,10 @@ int send_message(actor_id_t actor, message_t message) {
 	actor_t *recipient = &(tm->actors[actor]);
 	recipient->jobs[recipient->job_insert_index] = message;
 	recipient->job_insert_index = (recipient->job_insert_index + 1) % ACTOR_QUEUE_LIMIT;
+
+	if (tm->job_count == 0) { // TODO: czy to na pewno dobrze?
+		pthread_cond_signal(tm->work_cond);
+	}
 
 	pthread_mutex_unlock(tm->actors[actor].actor_mutex);
 

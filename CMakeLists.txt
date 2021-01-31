@@ -4,7 +4,8 @@ project (CACTI)
 enable_testing()
 
 #set(CMAKE_C_STANDARD ...)
-set(CMAKE_C_FLAGS "-g -Wall -Wextra -pthread")
+#set(CMAKE_C_FLAGS "-g -Wall -Wextra -pthread")
+set(CMAKE_CXX_FLAGS "-g -Wall -Wextra -pthread")
 
 # http://stackoverflow.com/questions/10555706/
 macro (add_executable _name)
@@ -16,6 +17,7 @@ macro (add_executable _name)
 endmacro()
 
 add_library(cacti STATIC cacti.c)
+add_executable(chaos chaos.cpp)
 add_executable(macierz macierz.c)
 add_executable(silnia silnia.c)
 add_subdirectory(test)
